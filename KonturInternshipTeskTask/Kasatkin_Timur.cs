@@ -11,13 +11,14 @@ namespace KonturInternshipTeskTask
 
         private bool CurrentGameOverOrNotExists => currentGame?.Over ?? true;
 
+        //TODO complete
+
+        #region turn' description regular expressions and appropriate actions
+
         private static bool OverOrNotExists(Game game)
         {
             return game?.Over ?? true;
         }
-
-        //TODO complete
-        #region turn' descriptions regular expressions and appropriate actions
 
         #region start new game 
 
@@ -42,11 +43,12 @@ namespace KonturInternshipTeskTask
 
         static Game PlayCard(string turnDescription, Game currentGame)
         {
-            if (OverOrNotExists(currentGame))
-                return null;
-            var cardIndex = ushort.Parse(playCardCommandRegex.Match(turnDescription).Groups["card_index"].Value);
-            currentGame.PlayCard(cardIndex);
-            return currentGame.Over ? null : currentGame;
+            if (!OverOrNotExists(currentGame))
+            {
+                var cardIndex = ushort.Parse(playCardCommandRegex.Match(turnDescription).Groups["card_index"].Value);
+                currentGame.PlayCard(cardIndex);
+            }
+            return currentGame;
         }
 
         #endregion
@@ -57,11 +59,12 @@ namespace KonturInternshipTeskTask
 
         static Game DropCard(string turnDescription, Game currentGame)
         {
-            if (OverOrNotExists(currentGame))
-                return null;
-            var cardIndex = ushort.Parse(dropCardCommandRegex.Match(turnDescription).Groups["card_index"].Value);
-            currentGame.DropCard(cardIndex);
-            return currentGame.Over ? null : currentGame;
+            if (!OverOrNotExists(currentGame))
+            {
+                var cardIndex = ushort.Parse(playCardCommandRegex.Match(turnDescription).Groups["card_index"].Value);
+                currentGame.DropCard(cardIndex);
+            }
+            return currentGame;
         }
 
         #endregion
@@ -84,6 +87,8 @@ namespace KonturInternshipTeskTask
 
         #endregion
 
+        #region connection between turn description and actual action
+
         private Dictionary<Regex, Func<string, Game, Game>> _commandActionDict = new Dictionary
             <Regex, Func<string, Game, Game>>
         {
@@ -91,57 +96,23 @@ namespace KonturInternshipTeskTask
             {playCardCommandRegex, PlayCard}
         };
 
+        private Func<string, Game, Game> GetTurnBy(string turnDescription)
+        {
+            return _commandActionDict
+                .FirstOrDefault(turnRegexActionPair => turnRegexActionPair.Key.IsMatch(turnDescription ?? ""))
+                .Value;
+        }
+
+        #endregion
+
         #endregion
 
         public void Play()
         {
-//            var commandActionDict = new Dictionary<Regex, Action<string>>
-//            {
-//                {
-//                    _startGameCommandRegex, (turnDescription) =>
-//                    {
-//                        string[] cardDescriptions =
-//                            _startGameCommandRegex.Match(turnDescription).Groups["deck"].Value.Split();
-//                        var player1Cards = cardDescriptions.Take(5).Select(CardUtils.ParseCard).ToList();
-//                        var player2Cards = cardDescriptions.Skip(5).Take(5).Select(CardUtils.ParseCard).ToList();
-//                        var deck = cardDescriptions.Skip(10).Select(CardUtils.ParseCard).ToList();
-//                        currentGame = new Game(new Player(player1Cards), new Player(player2Cards), deck);
-//                    }
-//                },
-//                {
-//                    playCardCommandRegex, (turnDescription) =>
-//                    {
-//                        if (!CurrentGameOverOrNotExists)
-//                        {
-//                            var cardIndex =
-//                                ushort.Parse(playCardCommandRegex.Match(turnDescription).Groups["card_index"].Value);
-//                            currentGame.PlayCard(cardIndex);
-//                        }
-//                    }
-//                },
-//                {
-//                    dropCardCommandRegex, (turnDescription) =>
-//                    {
-//                        if (!CurrentGameOverOrNotExists)
-//                        {
-//                            var cardIndex =
-//                                ushort.Parse(playCardCommandRegex.Match(turnDescription).Groups["card_index"].Value);
-//                            currentGame.DropCard(cardIndex);
-//                        }
-//                    }
-//                },
-//                {tellColorCommandRegex, (turnDescription) => { }},
-//                {tellRankCommandRegex, (turnDescription) => { }}
-//            };
-
             while (true)
             {
                 var turnDescription = Console.ReadLine();
-                currentGame = _commandActionDict
-                    // choose appropriate action for given turn desciption
-                    .FirstOrDefault(turnRegexActionPair => turnRegexActionPair.Key.IsMatch(turnDescription ?? ""))
-                    // perform found action
-                    .Value?.Invoke(turnDescription, currentGame);
+                currentGame = GetTurnBy(turnDescription)?.Invoke(turnDescription, currentGame);
                 if (CurrentGameOverOrNotExists)
                 {
                     Console.WriteLine("Turn: {0}, cards: {1}, with risk: {2}",
