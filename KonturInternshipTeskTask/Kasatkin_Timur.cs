@@ -204,10 +204,7 @@ namespace KonturInternshipTeskTask
 
         private Player _currentPlayer;
 
-        private Player _otherPlayer
-        {
-            get { return _currentPlayer == _player1 ? _player2 : _player1; }
-        }
+        private Player _otherPlayer => _currentPlayer == _player1 ? _player2 : _player1;
 
         #endregion
 
@@ -236,10 +233,37 @@ namespace KonturInternshipTeskTask
                 NumOfCorrectlyPlayedCards++;
 
                 //TODO think about risky moves
-//                if (!_currentPlayer.CertainAboutCard(cardIndex))
-//                {
-//                    NumOfRiskyTurns++;
-//                }
+                if (!_currentPlayer.KnowsAllAboutCard(cardIndex))
+                {
+                    if (_currentPlayer.KnowsCardColor(cardIndex))
+                    {
+                        if (_currentPlayer.UnknownRanks.ToList().Count > 1)
+                        {
+                            NumOfRiskyTurns++;
+                        }
+                    }
+                    else if (_currentPlayer.KnowsCardRank(cardIndex))
+                    {
+                        if (_currentPlayer.UnknownColors
+                            .Select(color => new Card(color, card.Rank))
+                            .Any(_card => !CanBePlayed(_card)))
+                        {
+                            NumOfRiskyTurns++;
+                        }
+                    }
+                    else
+                    {
+                        var unknownRanks = _currentPlayer.UnknownRanks.ToList();
+                        if (_currentPlayer.UnknownColors
+                            .SelectMany(color => unknownRanks,
+                                (color, rank) => new {color, rank})
+                            .Select(colorRank => new Card(colorRank.color, colorRank.rank))
+                            .Any(_card => !CanBePlayed(_card)))
+                        {
+                            NumOfRiskyTurns++;
+                        }
+                    }
+                }
 
                 _currentPlayer.PopCard(cardIndex);
                 PutCardOnTable(card);
@@ -361,7 +385,6 @@ namespace KonturInternshipTeskTask
 
     internal class Player
     {
-
         private List<CardColor?> _cardColors = new List<CardColor?>();
         private List<ushort> _cardRanks = new List<ushort>();
 
@@ -369,8 +392,8 @@ namespace KonturInternshipTeskTask
 
         public Player(List<Card> cards)
         {
-            if (cards == null || cards.Count < 5)
-                throw new ArgumentException("Player should have at least 5 cards");
+            if (cards == null || cards.Count != 5)
+                throw new ArgumentException("Player should have 5 cards");
             Cards = cards;
             _cardColors.AddRange(Enumerable.Repeat<CardColor?>(null, cards.Count));
             _cardRanks.AddRange(Enumerable.Repeat<ushort>(0, cards.Count)); //0 means rank is unknown
@@ -421,6 +444,31 @@ namespace KonturInternshipTeskTask
             }
         }
 
+        public IEnumerable<CardColor> KnownColors
+            => _cardColors.Where(color => color.HasValue).Select(color => color.Value);
+
+        public IEnumerable<CardColor> UnknownColors => CardUtils.CardColors.Except(KnownColors);
+
+        public IEnumerable<ushort> KnownRanks => _cardRanks.Where(rank => rank != 0);
+
+        public IEnumerable<ushort> UnknownRanks
+            => Enumerable.Range(1, 5).Select(rank => (ushort) rank).Except(KnownRanks);
+
+        public bool KnowsAllAboutCard(ushort cardIndex)
+        {
+            return KnowsCardColor(cardIndex) && KnowsCardRank(cardIndex);
+        }
+
+        public bool KnowsCardColor(ushort cardIndex)
+        {
+            return _cardColors[cardIndex].HasValue;
+        }
+
+        public bool KnowsCardRank(ushort cardIndex)
+        {
+            return _cardRanks[cardIndex] != 0;
+        }
+
         public override string ToString()
         {
             return $"Cards: {string.Join(" ", Cards)}";
@@ -456,6 +504,13 @@ namespace KonturInternshipTeskTask
 
     internal static class CardUtils
     {
+        public static readonly ISet<CardColor> CardColors;
+
+        static CardUtils()
+        {
+            CardColors = new HashSet<CardColor>(Enum.GetValues(typeof (CardColor)).Cast<CardColor>());
+        }
+
         public static CardColor? ParseColor(this string cardColorName)
         {
             return cardColorName[0].ParseColor();
