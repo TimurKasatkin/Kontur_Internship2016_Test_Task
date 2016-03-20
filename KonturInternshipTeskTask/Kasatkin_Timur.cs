@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
+using System.Collections.Immutable;
 
 namespace KonturInternshipTeskTask
 {
@@ -67,16 +68,15 @@ namespace KonturInternshipTeskTask
 
         #region tell color
 
-        static readonly Regex TellColorCommandRegex =
-            new Regex(
-                @"Tell color (?<color>Red|Green|Blue|White|Yellow) for cards (?<card_indexes>((?<card_index>\d+) ?)+)");
+        static readonly Regex TellColorCommandRegex = new Regex(
+            @"Tell color (?<proposedColor>Red|Green|Blue|White|Yellow) for cards (?<card_indexes>((?<card_index>\d+) ?)+)");
 
         static Game HandleTellColorCommand(string turnDescription, Game currentGame)
         {
             if (!OverOrNotExists(currentGame))
             {
                 var match = TellColorCommandRegex.Match(turnDescription);
-                var proposedColor = match.Groups["color"].Value.ParseColor().Value;
+                var proposedColor = match.Groups["proposedColor"].Value.ParseColor().Value;
                 var cardIndexes = match.Groups["card_indexes"].Value.Split()
                     .Select(ushort.Parse).ToList();
                 currentGame.TellColor(proposedColor, cardIndexes);
@@ -139,11 +139,11 @@ namespace KonturInternshipTeskTask
 
         #region non static part
 
-        private Game currentGame;
+        private Game _currentGame;
 
-        public bool CurrentGameExists => currentGame != null;
+        public bool CurrentGameExists => _currentGame != null;
 
-        public bool CurrentGameOver => currentGame.Over;
+        public bool CurrentGameOver => _currentGame.Over;
 
         public void Play()
         {
@@ -151,15 +151,11 @@ namespace KonturInternshipTeskTask
             while ((turnDescription = Console.ReadLine()) != null)
             {
                 //choose appropriate turn, perform it and  
-                currentGame = GetTurnBy(turnDescription)?.Invoke(turnDescription, currentGame) ?? currentGame;
-//                Console.WriteLine("==========================");
-//                Console.WriteLine(currentGame);
-//                Console.WriteLine("==========================");
+                _currentGame = GetTurnBy(turnDescription)?.Invoke(turnDescription, _currentGame) ?? _currentGame;
                 if (CurrentGameExists && CurrentGameOver)
                 {
                     Console.WriteLine("Turn: {0}, cards: {1}, with risk: {2}",
-                        currentGame.NumberOfTurns, currentGame.NumOfCorrectlyPlayedCards, currentGame.NumOfRiskyTurns);
-                    currentGame = null;
+                        _currentGame.NumberOfTurns, _currentGame.NumOfCorrectlyPlayedCards, _currentGame.NumOfRiskyTurns);
                 }
             }
         }
@@ -182,20 +178,17 @@ namespace KonturInternshipTeskTask
 
         private bool _over = false;
 
-        public bool Over
-        {
-            get { return _over || TableHasMaxNumberOfCards() || _deck.Count == 0; }
-        }
+        public bool Over => _over || TableHasMaxNumberOfCards() || _deck.Count == 0;
 
-        private List<Card> _deck;
+        private readonly List<Card> _deck;
 
-        private Dictionary<CardColor, ushort> _table = new Dictionary<CardColor, ushort>
+        private readonly Dictionary<CardColor, ushort> _table = new Dictionary<CardColor, ushort>
         {
             {CardColor.Red, 0},
             {CardColor.Green, 0},
             {CardColor.Blue, 0},
+            {CardColor.White, 0},
             {CardColor.Yellow, 0},
-            {CardColor.White, 0}
         };
 
         #region players information
@@ -232,19 +225,18 @@ namespace KonturInternshipTeskTask
             {
                 NumOfCorrectlyPlayedCards++;
 
-                //TODO think about risky moves
                 if (!_currentPlayer.KnowsAllAboutCard(cardIndex))
                 {
                     if (_currentPlayer.KnowsCardColor(cardIndex))
                     {
-                        if (_currentPlayer.UnknownRanks.ToList().Count > 1)
+                        if (_currentPlayer.UnknownRanksFor(cardIndex).ToList().Count > 1)
                         {
                             NumOfRiskyTurns++;
                         }
                     }
                     else if (_currentPlayer.KnowsCardRank(cardIndex))
                     {
-                        if (_currentPlayer.UnknownColors
+                        if (_currentPlayer.UnknownColorsFor(cardIndex)
                             .Select(color => new Card(color, card.Rank))
                             .Any(_card => !CanBePlayed(_card)))
                         {
@@ -253,8 +245,8 @@ namespace KonturInternshipTeskTask
                     }
                     else
                     {
-                        var unknownRanks = _currentPlayer.UnknownRanks.ToList();
-                        if (_currentPlayer.UnknownColors
+                        var unknownRanks = _currentPlayer.UnknownRanksFor(cardIndex).ToList();
+                        if (_currentPlayer.UnknownColorsFor(cardIndex)
                             .SelectMany(color => unknownRanks,
                                 (color, rank) => new {color, rank})
                             .Select(colorRank => new Card(colorRank.color, colorRank.rank))
@@ -300,7 +292,7 @@ namespace KonturInternshipTeskTask
                 otherPlayerCardsWithProposedColor.Count == cardIndexes.Count;
             if (tipIsValid)
             {
-                _otherPlayer.TellColorFor(proposedColor, cardIndexes);
+                _otherPlayer.LearnColorFor(proposedColor, cardIndexes);
             }
             else
             {
@@ -323,7 +315,7 @@ namespace KonturInternshipTeskTask
                 otherPlayerCardsWithProposedRank.Count == cardIndexes.Count;
             if (tipIsValid)
             {
-                _otherPlayer.TellRankFor(proposedRank, cardIndexes);
+                _otherPlayer.LearnRankFor(proposedRank, cardIndexes);
             }
             else
             {
@@ -371,44 +363,48 @@ namespace KonturInternshipTeskTask
         }
 
         #endregion
-
-        public override string ToString()
-        {
-            return $"Turn: {NumberOfTurns}, Score: {NumOfCorrectlyPlayedCards}, _over: {_over}, Over: {Over}\n" +
-                   $"Deck: {string.Join(" ", _deck)}\n" +
-                   $"Table: {string.Join(" ", _table.Select(pair => $"{pair.Key.ToString()[0]}{pair.Value}"))}\n" +
-                   $"Player1: {_player1}\n" +
-                   $"Player2: {_player2}\n" +
-                   $"CurrentPlayer: {(_currentPlayer == _player1 ? "Player1" : "Player2")}\n";
-        }
     }
 
     internal class Player
     {
-        private List<CardColor?> _cardColors = new List<CardColor?>();
-        private List<ushort> _cardRanks = new List<ushort>();
+        private readonly List<Dictionary<CardColor, bool?>> _colorKnowledges;
+        private readonly List<Dictionary<ushort, bool?>> _rankKnowledges;
+
+        private static readonly ImmutableList<ushort> AllCardIndexes =
+            Enumerable.Range(0, 5).Select(rank => (ushort) rank).ToImmutableList();
 
         public List<Card> Cards { get; }
+
+        private static Dictionary<CardColor, bool?> CreateColorKnowledgesDict()
+        {
+            return CardUtils.CardColors.ToDictionary<CardColor, CardColor, bool?>(color => color, color => null);
+        }
+
+        private static Dictionary<ushort, bool?> CreateRankKnowledgesDict()
+        {
+            return CardUtils.CardRanks.ToDictionary<ushort, ushort, bool?>(rank => rank, rank => null);
+        }
 
         public Player(List<Card> cards)
         {
             if (cards == null || cards.Count != 5)
                 throw new ArgumentException("Player should have 5 cards");
             Cards = cards;
-            _cardColors.AddRange(Enumerable.Repeat<CardColor?>(null, cards.Count));
-            _cardRanks.AddRange(Enumerable.Repeat<ushort>(0, cards.Count)); //0 means rank is unknown
+
+            _colorKnowledges =
+                Enumerable.Range(1, CardUtils.CardColors.Count).Select(i => CreateColorKnowledgesDict()).ToList();
+
+            _rankKnowledges =
+                Enumerable.Range(1, CardUtils.CardColors.Count).Select(i => CreateRankKnowledgesDict()).ToList();
         }
+
+        #region cards management
 
         public void AddCard(Card card)
         {
             Cards.Add(card);
-            _cardColors.Add(null);
-            _cardRanks.Add(0);
-        }
-
-        public bool CertainAboutCardColorAndRank(ushort cardIndex)
-        {
-            return _cardColors[cardIndex].HasValue && _cardRanks[cardIndex] != 0;
+            _colorKnowledges.Add(CreateColorKnowledgesDict());
+            _rankKnowledges.Add(CreateRankKnowledgesDict());
         }
 
         public Card GetCard(ushort cardIndex)
@@ -418,41 +414,48 @@ namespace KonturInternshipTeskTask
 
         public Card PopCard(ushort cardIndex)
         {
-            _cardColors.RemoveAt(cardIndex);
-            _cardRanks.RemoveAt(cardIndex);
+            _colorKnowledges.RemoveAt(cardIndex);
+            _rankKnowledges.RemoveAt(cardIndex);
             return Cards.PopAt(cardIndex);
         }
 
-        public void TellColorFor(CardColor color, ushort cardIndex)
-        {
-            _cardColors[cardIndex] = color;
-        }
+        #endregion
 
-        public void TellColorFor(CardColor color, IEnumerable<ushort> cardIndexes)
+        #region knowledges about cards
+
+        public void LearnColorFor(CardColor proposedColor, IEnumerable<ushort> cardIndexes)
         {
+            cardIndexes = cardIndexes.ToList();
             foreach (var cardIndex in cardIndexes)
             {
-                _cardColors[cardIndex] = color;
+                _colorKnowledges[cardIndex][proposedColor] = true;
+                foreach (var otherColor in CardUtils.CardColors.Except(new[] {proposedColor}))
+                {
+                    _colorKnowledges[cardIndex][otherColor] = false;
+                }
+            }
+            foreach (var otherCardIndex in AllCardIndexes.Except(cardIndexes))
+            {
+                _colorKnowledges[otherCardIndex][proposedColor] = false;
             }
         }
 
-        public void TellRankFor(ushort proposedRank, IEnumerable<ushort> cardIndexes)
+        public void LearnRankFor(ushort proposedRank, IEnumerable<ushort> cardIndexes)
         {
+            cardIndexes = cardIndexes.ToList();
             foreach (var cardIndex in cardIndexes)
             {
-                _cardRanks[cardIndex] = proposedRank;
+                _rankKnowledges[cardIndex][proposedRank] = true;
+                foreach (var otherRank in CardUtils.CardRanks.Except(new[] {proposedRank}))
+                {
+                    _rankKnowledges[cardIndex][otherRank] = false;
+                }
+            }
+            foreach (var otherCardIndex in AllCardIndexes.Except(cardIndexes))
+            {
+                _rankKnowledges[otherCardIndex][proposedRank] = false;
             }
         }
-
-        public IEnumerable<CardColor> KnownColors
-            => _cardColors.Where(color => color.HasValue).Select(color => color.Value);
-
-        public IEnumerable<CardColor> UnknownColors => CardUtils.CardColors.Except(KnownColors);
-
-        public IEnumerable<ushort> KnownRanks => _cardRanks.Where(rank => rank != 0);
-
-        public IEnumerable<ushort> UnknownRanks
-            => Enumerable.Range(1, 5).Select(rank => (ushort) rank).Except(KnownRanks);
 
         public bool KnowsAllAboutCard(ushort cardIndex)
         {
@@ -461,13 +464,37 @@ namespace KonturInternshipTeskTask
 
         public bool KnowsCardColor(ushort cardIndex)
         {
-            return _cardColors[cardIndex].HasValue;
+            return _colorKnowledges[cardIndex]
+                .Select(pair => pair.Value)
+                .Where(colorKnown => colorKnown.HasValue)
+                .Select(colorKnown => colorKnown.Value)
+                .Any(colorKnown => colorKnown);
         }
 
         public bool KnowsCardRank(ushort cardIndex)
         {
-            return _cardRanks[cardIndex] != 0;
+            return _rankKnowledges[cardIndex]
+                .Select(pair => pair.Value)
+                .Where(rankKnown => rankKnown.HasValue)
+                .Select(rankKnown => rankKnown.Value)
+                .Any(rankKnown => rankKnown);
         }
+
+        public IEnumerable<CardColor> UnknownColorsFor(ushort cardIndex)
+        {
+            return _colorKnowledges[cardIndex]
+                .Where(pair => !pair.Value.HasValue)
+                .Select(pair => pair.Key);
+        }
+
+        public IEnumerable<ushort> UnknownRanksFor(ushort cardIndex)
+        {
+            return _rankKnowledges[cardIndex]
+                .Where(pair => !pair.Value.HasValue)
+                .Select(pair => pair.Key);
+        }
+
+        #endregion
 
         public override string ToString()
         {
@@ -480,6 +507,10 @@ namespace KonturInternshipTeskTask
         public Card(CardColor color, ushort rank)
         {
             this.Color = color;
+            if (!(Constants.MinCardRank <= rank && rank <= Constants.MaxCardRank))
+            {
+                throw new ArgumentException("Invalid card rank");
+            }
             this.Rank = rank;
         }
 
@@ -502,14 +533,22 @@ namespace KonturInternshipTeskTask
         White
     }
 
+    internal class Constants
+    {
+        public const ushort MinCardRank = 1;
+
+        public const ushort MaxCardRank = 5;
+    }
+
     internal static class CardUtils
     {
-        public static readonly ISet<CardColor> CardColors;
+        public static readonly ISet<CardColor> CardColors =
+            Enum.GetValues(typeof (CardColor)).Cast<CardColor>().ToImmutableSortedSet();
 
-        static CardUtils()
-        {
-            CardColors = new HashSet<CardColor>(Enum.GetValues(typeof (CardColor)).Cast<CardColor>());
-        }
+        public static readonly ISet<ushort> CardRanks =
+            Enumerable.Range(Constants.MinCardRank, Constants.MaxCardRank)
+                .Select(rank => (ushort) rank)
+                .ToImmutableSortedSet();
 
         public static CardColor? ParseColor(this string cardColorName)
         {
